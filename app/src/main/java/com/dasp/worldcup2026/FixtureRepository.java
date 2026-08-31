@@ -32,12 +32,10 @@ final class FixtureRepository {
     private static final String LAST_ERROR = "last_error";
 
     /*
-     * OpenFootball sources.
+     * OpenFootball data sources.
      *
-     * These are DATA SOURCES only.
-     * No individual matches are hardcoded here.
-     *
-     * Each source is allowed to fail independently.
+     * These are data sources only.
+     * No individual matches are hardcoded.
      */
     private static final Source[] SOURCES = {
 
@@ -88,9 +86,14 @@ final class FixtureRepository {
     List<Fixture> cachedFixtures() {
 
         String cached =
-                preferences.getString(CACHE, "");
+                preferences.getString(
+                        CACHE,
+                        ""
+                );
 
-        if (cached == null || cached.trim().isEmpty()) {
+        if (cached == null
+                || cached.trim().isEmpty()) {
+
             return new ArrayList<>();
         }
 
@@ -160,8 +163,9 @@ final class FixtureRepository {
                 if (message == null
                         || message.trim().isEmpty()) {
 
-                    message = exception.getClass()
-                            .getSimpleName();
+                    message =
+                            exception.getClass()
+                                    .getSimpleName();
                 }
 
                 errors.add(
@@ -173,11 +177,8 @@ final class FixtureRepository {
         }
 
         /*
-         * Only replace the cache if at least one
-         * source returned usable data.
-         *
-         * This prevents one broken endpoint from
-         * wiping all previously downloaded fixtures.
+         * Only replace the cache when at least one
+         * source returned usable fixture data.
          */
         if (!all.isEmpty()) {
 
@@ -204,8 +205,8 @@ final class FixtureRepository {
         }
 
         /*
-         * No source returned usable data.
-         * Keep the existing cache.
+         * No source worked.
+         * Preserve the existing cache.
          */
         throw new Exception(
                 errors.isEmpty()
@@ -229,6 +230,7 @@ final class FixtureRepository {
                 );
 
         if (lastUpdate <= 0L) {
+
             return "OpenFootball data not yet downloaded";
         }
 
@@ -253,7 +255,8 @@ final class FixtureRepository {
         if (error != null
                 && !error.trim().isEmpty()) {
 
-            line += " • Some sources unavailable";
+            line +=
+                    " • Some sources unavailable";
         }
 
         return line;
@@ -279,23 +282,64 @@ final class FixtureRepository {
         List<Fixture> result =
                 new ArrayList<>();
 
-        String trimmed =
-                json == null
-                        ? ""
-                        : json.trim();
+        if (json == null
+                || json.trim().isEmpty()) {
 
-        if (trimmed.isEmpty()) {
             return result;
         }
 
         /*
-         * OpenFootball sources may expose either
-         * an object containing "matches" or an array.
+         * OpenFootball files can have different
+         * JSON shapes. First try an object.
          */
-        if (trimmed.startsWith("[")) {
+        try {
+
+            JSONObject root =
+                    new JSONObject(json);
+
+            JSONArray matches =
+                    root.optJSONArray("matches");
+
+            if (matches != null) {
+
+                for (int i = 0;
+                     i < matches.length();
+                     i++) {
+
+                    JSONObject item =
+                            matches.optJSONObject(i);
+
+                    if (item == null) {
+                        continue;
+                    }
+
+                    Fixture fixture =
+                            parseFixture(
+                                    item,
+                                    competition
+                            );
+
+                    if (fixture != null) {
+                        result.add(fixture);
+                    }
+                }
+
+                return result;
+            }
+
+        } catch (Exception ignored) {
+            /*
+             * Try array form below.
+             */
+        }
+
+        /*
+         * Some datasets may be a JSON array directly.
+         */
+        try {
 
             JSONArray array =
-                    new JSONArray(trimmed);
+                    new JSONArray(json);
 
             for (int i = 0;
                  i < array.length();
@@ -319,40 +363,10 @@ final class FixtureRepository {
                 }
             }
 
-            return result;
-        }
-
-        JSONObject root =
-                new JSONObject(trimmed);
-
-        JSONArray matches =
-                root.optJSONArray("matches");
-
-        if (matches == null) {
-
-            return result;
-        }
-
-        for (int i = 0;
-             i < matches.length();
-             i++) {
-
-            JSONObject item =
-                    matches.optJSONObject(i);
-
-            if (item == null) {
-                continue;
-            }
-
-            Fixture fixture =
-                    parseFixture(
-                            item,
-                            competition
-                    );
-
-            if (fixture != null) {
-                result.add(fixture);
-            }
+        } catch (Exception ignored) {
+            /*
+             * Source is simply unusable.
+             */
         }
 
         return result;
@@ -365,27 +379,20 @@ final class FixtureRepository {
 
         try {
 
-            /*
-             * Work on a copy so the original source
-             * object is never modified.
-             */
             JSONObject copy =
                     new JSONObject(
                             item.toString()
                     );
 
             /*
-             * Competition comes from the source
-             * configuration when the dataset does
-             * not provide one itself.
+             * Competition belongs to the source,
+             * not to an individual hardcoded match.
              */
-            String sourceCompetition =
-                    copy.optString(
-                            "competition"
-                    );
-
-            if (sourceCompetition == null
-                    || sourceCompetition.trim().isEmpty()) {
+            if (!copy.has("competition")
+                    || copy.optString(
+                    "competition",
+                    ""
+            ).trim().isEmpty()) {
 
                 copy.put(
                         "competition",
@@ -410,6 +417,10 @@ final class FixtureRepository {
         List<Fixture> fixtures =
                 new ArrayList<>();
 
+        if (array == null) {
+            return fixtures;
+        }
+
         for (int i = 0;
              i < array.length();
              i++) {
@@ -422,6 +433,111 @@ final class FixtureRepository {
             }
 
             try {
+
+                /*
+                 * Read every value into the correct
+                 * Java type BEFORE constructing Fixture.
+                 *
+                 * This is important because Fixture's
+                 * constructor expects:
+                 *
+                 * id
+                 * timestampSeconds
+                 * competition
+                 * round
+                 * venue
+                 * city
+                 * homeName
+                 * awayName
+                 * homeGoals
+                 * awayGoals
+                 * statusShort
+                 * statusLong
+                 * elapsed
+                 * homeScorers
+                 * awayScorers
+                 */
+
+                long id =
+                        item.optLong(
+                                "id",
+                                0L
+                        );
+
+                long timestampSeconds =
+                        item.optLong(
+                                "timestampSeconds",
+                                0L
+                        );
+
+                String competition =
+                        item.optString(
+                                "competition",
+                                ""
+                        );
+
+                String round =
+                        item.optString(
+                                "round",
+                                ""
+                        );
+
+                String venue =
+                        item.optString(
+                                "venue",
+                                ""
+                        );
+
+                String city =
+                        item.optString(
+                                "city",
+                                ""
+                        );
+
+                String homeName =
+                        item.optString(
+                                "homeName",
+                                ""
+                        );
+
+                String awayName =
+                        item.optString(
+                                "awayName",
+                                ""
+                        );
+
+                int homeGoals =
+                        item.has("homeGoals")
+                                ? item.optInt(
+                                "homeGoals"
+                        )
+                                : -1;
+
+                int awayGoals =
+                        item.has("awayGoals")
+                                ? item.optInt(
+                                "awayGoals"
+                        )
+                                : -1;
+
+                String statusShort =
+                        item.optString(
+                                "statusShort",
+                                ""
+                        );
+
+                String statusLong =
+                        item.optString(
+                                "statusLong",
+                                ""
+                        );
+
+                int elapsed =
+                        item.has("elapsed")
+                                ? item.optInt(
+                                "elapsed"
+                        )
+                                : 0;
 
                 List<String> homeScorers =
                         stringList(
@@ -438,85 +554,13 @@ final class FixtureRepository {
                         );
 
                 /*
-                 * IMPORTANT:
-                 *
-                 * This exactly matches the Fixture
-                 * constructor currently in the project:
-                 *
-                 * id
-                 * timestampSeconds
-                 * round
-                 * venue
-                 * city
-                 * homeName
-                 * awayName
-                 * homeGoals
-                 * awayGoals
-                 * statusShort
-                 * statusLong
-                 * elapsed
-                 * competition
-                 * homeScorers
-                 * awayScorers
+                 * THIS ORDER MUST MATCH Fixture.java.
                  */
-
-                long id =
-                        item.optLong("id");
-
-                long timestampSeconds =
-                        item.optLong(
-                                "timestampSeconds"
-                        );
-
-                String round =
-                        item.optString("round");
-
-                String venue =
-                        item.optString("venue");
-
-                String city =
-                        item.optString("city");
-
-                String homeName =
-                        item.optString("homeName");
-
-                String awayName =
-                        item.optString("awayName");
-
-                int homeGoals =
-                        item.has("homeGoals")
-                                ? item.optInt("homeGoals")
-                                : -1;
-
-                int awayGoals =
-                        item.has("awayGoals")
-                                ? item.optInt("awayGoals")
-                                : -1;
-
-                String statusShort =
-                        item.optString(
-                                "statusShort"
-                        );
-
-                String statusLong =
-                        item.optString(
-                                "statusLong"
-                        );
-
-                int elapsed =
-                        item.has("elapsed")
-                                ? item.optInt("elapsed")
-                                : 0;
-
-                String competition =
-                        item.optString(
-                                "competition"
-                        );
-
                 Fixture fixture =
                         new Fixture(
                                 id,
                                 timestampSeconds,
+                                competition,
                                 round,
                                 venue,
                                 city,
@@ -527,7 +571,6 @@ final class FixtureRepository {
                                 statusShort,
                                 statusLong,
                                 elapsed,
-                                competition,
                                 homeScorers,
                                 awayScorers
                         );
@@ -535,10 +578,10 @@ final class FixtureRepository {
                 fixtures.add(fixture);
 
             } catch (Exception ignored) {
+
                 /*
-                 * Ignore a malformed cached fixture
-                 * rather than preventing the remaining
-                 * fixtures from loading.
+                 * Ignore one malformed cached fixture
+                 * without breaking the whole cache.
                  */
             }
         }
@@ -570,6 +613,11 @@ final class FixtureRepository {
                 item.put(
                         "timestampSeconds",
                         fixture.timestampSeconds
+                );
+
+                item.put(
+                        "competition",
+                        fixture.competition
                 );
 
                 item.put(
@@ -623,11 +671,6 @@ final class FixtureRepository {
                 );
 
                 item.put(
-                        "competition",
-                        fixture.competition
-                );
-
-                item.put(
                         "homeScorers",
                         new JSONArray(
                                 fixture.homeScorers
@@ -645,8 +688,8 @@ final class FixtureRepository {
 
             } catch (Exception ignored) {
                 /*
-                 * Ignore an individual serialization
-                 * failure rather than crashing the save.
+                 * Ignore one fixture that cannot be
+                 * serialized.
                  */
             }
         }
@@ -672,13 +715,13 @@ final class FixtureRepository {
         for (Fixture fixture : input) {
 
             String key =
-                    fixture.homeName
+                    fixture.competition
+                            + "|"
+                            + fixture.homeName
                             + "|"
                             + fixture.awayName
                             + "|"
-                            + fixture.timestampSeconds
-                            + "|"
-                            + fixture.competition;
+                            + fixture.timestampSeconds;
 
             if (seen.add(key)) {
                 result.add(fixture);
@@ -738,7 +781,14 @@ final class FixtureRepository {
                     20000
             );
 
-            connection.setUseCaches(false);
+            connection.setUseCaches(
+                    false
+            );
+
+            connection.setRequestProperty(
+                    "User-Agent",
+                    "FootballFixture/1.0"
+            );
 
             int response =
                     connection.getResponseCode();
@@ -747,7 +797,8 @@ final class FixtureRepository {
                     || response >= 300) {
 
                 throw new Exception(
-                        "HTTP " + response
+                        "HTTP "
+                                + response
                 );
             }
 
@@ -811,7 +862,9 @@ final class FixtureRepository {
             if (value != null
                     && !value.trim().isEmpty()) {
 
-                result.add(value);
+                result.add(
+                        value.trim()
+                );
             }
         }
 
@@ -826,11 +879,6 @@ final class FixtureRepository {
                 new StringBuilder();
 
         for (String error : errors) {
-
-            if (error == null
-                    || error.trim().isEmpty()) {
-                continue;
-            }
 
             if (builder.length() > 0) {
                 builder.append("; ");
