@@ -34,13 +34,10 @@ final class FixtureRepository {
     private static final String LAST_ERROR = "last_error";
 
     /*
-     * OpenFootball sources.
+     * OpenFootball data sources.
      *
-     * IMPORTANT:
-     * These are DATA SOURCES only.
-     * No match information is hardcoded here.
-     *
-     * Each source is allowed to fail independently.
+     * These are data sources only.
+     * No individual match is hardcoded.
      */
     private static final Source[] SOURCES = {
 
@@ -71,7 +68,7 @@ final class FixtureRepository {
 
             new Source(
                     "FIFA World Cup",
-                    "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+                    "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/2026.json"
             )
     };
 
@@ -125,8 +122,7 @@ final class FixtureRepository {
             return true;
         }
 
-        return System.currentTimeMillis()
-                - lastUpdate
+        return System.currentTimeMillis() - lastUpdate
                 >= UPDATE_INTERVAL_MS;
     }
 
@@ -163,24 +159,23 @@ final class FixtureRepository {
                 String message =
                         exception.getMessage();
 
+                if (message == null
+                        || message.trim().isEmpty()) {
+                    message = exception.getClass()
+                            .getSimpleName();
+                }
+
                 errors.add(
                         source.name
                                 + ": "
-                                + (
-                                message == null
-                                        ? "Unknown error"
-                                        : message
-                        )
+                                + message
                 );
             }
         }
 
         /*
-         * Only replace the cache if at least one
-         * source successfully returned usable data.
-         *
-         * This prevents one broken endpoint from
-         * wiping the entire application.
+         * Never destroy a good cache just because
+         * one or more sources failed.
          */
         if (!all.isEmpty()) {
 
@@ -206,10 +201,6 @@ final class FixtureRepository {
             return all;
         }
 
-        /*
-         * Nothing could be downloaded.
-         * Keep the previous cache.
-         */
         throw new Exception(
                 errors.isEmpty()
                         ? "No fixture data available"
@@ -283,40 +274,89 @@ final class FixtureRepository {
         List<Fixture> result =
                 new ArrayList<>();
 
-        /*
-         * OpenFootball datasets normally use
-         * a top-level JSON object containing
-         * a "matches" array.
-         */
-        JSONObject root =
-                new JSONObject(json);
+        String trimmed =
+                json == null
+                        ? ""
+                        : json.trim();
 
-        JSONArray matches =
-                root.optJSONArray("matches");
-
-        if (matches == null) {
+        if (trimmed.isEmpty()) {
             return result;
         }
 
-        for (int i = 0;
-             i < matches.length();
-             i++) {
+        /*
+         * OpenFootball JSON normally uses:
+         *
+         * {
+         *   "name": "...",
+         *   "matches": [...]
+         * }
+         */
+        if (trimmed.startsWith("{")) {
 
-            JSONObject item =
-                    matches.optJSONObject(i);
+            JSONObject root =
+                    new JSONObject(trimmed);
 
-            if (item == null) {
-                continue;
+            JSONArray matches =
+                    root.optJSONArray("matches");
+
+            if (matches == null) {
+                return result;
             }
 
-            Fixture fixture =
-                    parseFixture(
-                            item,
-                            competition
-                    );
+            for (int i = 0;
+                 i < matches.length();
+                 i++) {
 
-            if (fixture != null) {
-                result.add(fixture);
+                JSONObject item =
+                        matches.optJSONObject(i);
+
+                if (item == null) {
+                    continue;
+                }
+
+                Fixture fixture =
+                        parseFixture(
+                                item,
+                                competition
+                        );
+
+                if (fixture != null) {
+                    result.add(fixture);
+                }
+            }
+
+            return result;
+        }
+
+        /*
+         * Also support a source whose root itself
+         * is a JSON array.
+         */
+        if (trimmed.startsWith("[")) {
+
+            JSONArray array =
+                    new JSONArray(trimmed);
+
+            for (int i = 0;
+                 i < array.length();
+                 i++) {
+
+                JSONObject item =
+                        array.optJSONObject(i);
+
+                if (item == null) {
+                    continue;
+                }
+
+                Fixture fixture =
+                        parseFixture(
+                                item,
+                                competition
+                        );
+
+                if (fixture != null) {
+                    result.add(fixture);
+                }
             }
         }
 
@@ -336,14 +376,13 @@ final class FixtureRepository {
                     );
 
             /*
-             * Competition comes from the source
-             * configuration.
-             *
-             * This does NOT hardcode a match.
+             * Competition belongs to the source,
+             * not to an individual hardcoded match.
              */
             if (!copy.has("competition")
                     || copy.optString(
-                    "competition"
+                    "competition",
+                    ""
             ).trim().isEmpty()) {
 
                 copy.put(
@@ -396,34 +435,64 @@ final class FixtureRepository {
                                 )
                         );
 
+                /*
+                 * IMPORTANT:
+                 *
+                 * This exactly matches the Fixture
+                 * constructor currently in the project:
+                 *
+                 * id
+                 * timestampSeconds
+                 * round
+                 * venue
+                 * city
+                 * homeName
+                 * awayName
+                 * homeGoals
+                 * awayGoals
+                 * statusShort
+                 * statusLong
+                 * elapsed
+                 * competition
+                 * homeScorers
+                 * awayScorers
+                 */
+
                 Fixture fixture =
                         new Fixture(
                                 item.optLong(
-                                        "id"
+                                        "id",
+                                        0L
                                 ),
 
                                 item.optLong(
-                                        "timestampSeconds"
+                                        "timestampSeconds",
+                                        0L
                                 ),
 
                                 item.optString(
-                                        "round"
+                                        "round",
+                                        ""
                                 ),
 
                                 item.optString(
-                                        "venue"
+                                        "venue",
+                                        ""
                                 ),
 
                                 item.optString(
-                                        "city"
+                                        "city",
+                                        ""
                                 ),
 
                                 item.optString(
-                                        "homeName"
+                                        "homeName",
+                                        ""
                                 ),
 
                                 item.optString(
-                                        "awayName"
+                                        "awayName",
+                                        ""
                                 ),
 
                                 item.optInt(
@@ -437,30 +506,37 @@ final class FixtureRepository {
                                 ),
 
                                 item.optString(
-                                        "statusShort"
-                                ),
-
-                                item.optString(
-                                        "statusLong"
-                                ),
-
-                                item.optString(
-                                        "elapsed",
+                                        "statusShort",
                                         ""
                                 ),
 
                                 item.optString(
-                                        "competition"
+                                        "statusLong",
+                                        ""
+                                ),
+
+                                item.optInt(
+                                        "elapsed",
+                                        0
+                                ),
+
+                                item.optString(
+                                        "competition",
+                                        ""
                                 ),
 
                                 homeScorers,
+
                                 awayScorers
                         );
 
                 fixtures.add(fixture);
 
             } catch (Exception ignored) {
-                // Ignore malformed cached entries.
+                /*
+                 * Ignore only the malformed cached
+                 * record. Do not destroy the cache.
+                 */
             }
         }
 
@@ -565,7 +641,6 @@ final class FixtureRepository {
                 array.put(item);
 
             } catch (Exception ignored) {
-                // Ignore malformed fixture during caching.
             }
         }
 
@@ -613,7 +688,6 @@ final class FixtureRepository {
         Collections.sort(
                 fixtures,
                 new Comparator<Fixture>() {
-
                     @Override
                     public int compare(
                             Fixture a,
@@ -659,6 +733,11 @@ final class FixtureRepository {
 
             connection.setUseCaches(false);
 
+            connection.setRequestProperty(
+                    "User-Agent",
+                    "Football-Fixture-App"
+            );
+
             int response =
                     connection.getResponseCode();
 
@@ -666,7 +745,8 @@ final class FixtureRepository {
                     || response >= 300) {
 
                 throw new Exception(
-                        "HTTP " + response
+                        "HTTP "
+                                + response
                 );
             }
 
@@ -727,8 +807,12 @@ final class FixtureRepository {
                             ""
                     );
 
-            if (!value.isEmpty()) {
-                result.add(value);
+            if (value != null
+                    && !value.trim().isEmpty()) {
+
+                result.add(
+                        value.trim()
+                );
             }
         }
 
