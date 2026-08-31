@@ -16,6 +16,7 @@ final class Fixture {
     final long id;
     final long timestampSeconds;
 
+    final String competition;
     final String round;
     final String venue;
     final String city;
@@ -30,14 +31,13 @@ final class Fixture {
     final String statusLong;
     final int elapsed;
 
-    final String competition;
-
     final List<String> homeScorers;
     final List<String> awayScorers;
 
     Fixture(
             long id,
             long timestampSeconds,
+            String competition,
             String round,
             String venue,
             String city,
@@ -48,13 +48,13 @@ final class Fixture {
             String statusShort,
             String statusLong,
             int elapsed,
-            String competition,
             List<String> homeScorers,
             List<String> awayScorers
     ) {
         this.id = id;
         this.timestampSeconds = timestampSeconds;
 
+        this.competition = clean(competition);
         this.round = clean(round);
         this.venue = clean(venue);
         this.city = clean(city);
@@ -69,52 +69,52 @@ final class Fixture {
         this.statusLong = clean(statusLong);
         this.elapsed = elapsed;
 
-        this.competition = clean(competition);
+        this.homeScorers =
+                homeScorers == null
+                        ? new ArrayList<String>()
+                        : new ArrayList<>(homeScorers);
 
-        this.homeScorers = homeScorers == null
-                ? new ArrayList<String>()
-                : new ArrayList<>(homeScorers);
-
-        this.awayScorers = awayScorers == null
-                ? new ArrayList<String>()
-                : new ArrayList<>(awayScorers);
+        this.awayScorers =
+                awayScorers == null
+                        ? new ArrayList<String>()
+                        : new ArrayList<>(awayScorers);
     }
 
-    /*
-     * Generic OpenFootball JSON parser.
-     *
-     * It only uses information that actually exists
-     * in the supplied JSON. Missing fields remain empty.
-     */
     static Fixture fromOpenFootballJson(JSONObject item) {
 
-        JSONObject score = item.optJSONObject("score");
+        JSONObject scoreObject = item.optJSONObject("score");
 
         int homeGoals = -1;
         int awayGoals = -1;
 
-        if (score != null) {
-            JSONArray fullTime = score.optJSONArray("ft");
+        if (scoreObject != null) {
+            JSONArray fullTime = scoreObject.optJSONArray("ft");
 
             if (fullTime != null && fullTime.length() >= 2) {
                 homeGoals = fullTime.optInt(0, -1);
                 awayGoals = fullTime.optInt(1, -1);
             }
-        }
-
-        List<String> homeScorers = parseScorers(item.optJSONArray("goals1"));
-        List<String> awayScorers = parseScorers(item.optJSONArray("goals2"));
-
-        String statusShort;
-        String statusLong;
-
-        if (homeGoals >= 0 && awayGoals >= 0) {
-            statusShort = "FT";
-            statusLong = "Match Finished";
         } else {
-            statusShort = "NS";
-            statusLong = "Not Started";
+            /*
+             * Some OpenFootball datasets may represent score
+             * directly as an array.
+             */
+            JSONArray directScore = item.optJSONArray("score");
+
+            if (directScore != null && directScore.length() >= 2) {
+                homeGoals = directScore.optInt(0, -1);
+                awayGoals = directScore.optInt(1, -1);
+            }
         }
+
+        boolean finished =
+                homeGoals >= 0 && awayGoals >= 0;
+
+        List<String> homeScorers =
+                readScorers(item, "scorers1");
+
+        List<String> awayScorers =
+                readScorers(item, "scorers2");
 
         return new Fixture(
                 item.optLong("num", stableId(item)),
@@ -122,6 +122,7 @@ final class Fixture {
                         item.optString("date"),
                         item.optString("time")
                 ),
+                item.optString("competition"),
                 item.optString("round"),
                 item.optString("ground"),
                 item.optString("city"),
@@ -129,86 +130,28 @@ final class Fixture {
                 item.optString("team2"),
                 homeGoals,
                 awayGoals,
-                statusShort,
-                statusLong,
+                finished ? "FT" : "NS",
+                finished ? "Match Finished" : "Not Started",
                 0,
-                item.optString("competition"),
                 homeScorers,
                 awayScorers
         );
     }
 
-    private static List<String> parseScorers(JSONArray goals) {
-
+    private static List<String> readScorers(
+            JSONObject item,
+            String key
+    ) {
         List<String> scorers = new ArrayList<>();
 
-        if (goals == null) {
-            return scorers;
-        }
+        JSONArray array = item.optJSONArray(key);
 
-        for (int i = 0; i < goals.length(); i++) {
+        if (array != null) {
+            for (int i = 0; i < array.length(); i++) {
+                String value = array.optString(i, "");
 
-            Object value = goals.opt(i);
-
-            if (value == null) {
-                continue;
-            }
-
-            /*
-             * Some OpenFootball JSON data represents a goal
-             * as an object containing scorer information.
-             */
-            if (value instanceof JSONObject) {
-
-                JSONObject goal = (JSONObject) value;
-
-                String name = goal.optString("name");
-                String minute = goal.optString("minute");
-
-                boolean penalty = goal.optBoolean("penalty", false);
-                boolean ownGoal = goal.optBoolean("owngoal", false);
-
-                StringBuilder line = new StringBuilder();
-
-                if (!name.isEmpty()) {
-                    line.append(name);
-                }
-
-                if (!minute.isEmpty()) {
-                    if (line.length() > 0) {
-                        line.append(" ");
-                    }
-
-                    line.append(minute);
-
-                    if (!minute.endsWith("'")) {
-                        line.append("'");
-                    }
-                }
-
-                if (penalty) {
-                    line.append(" (pen.)");
-                }
-
-                if (ownGoal) {
-                    line.append(" (OG)");
-                }
-
-                if (line.length() > 0) {
-                    scorers.add(line.toString());
-                }
-
-            } else {
-
-                /*
-                 * If a source already supplies a formatted scorer
-                 * string, preserve it instead of trying to guess
-                 * its structure.
-                 */
-                String text = String.valueOf(value).trim();
-
-                if (!text.isEmpty()) {
-                    scorers.add(text);
+                if (!value.trim().isEmpty()) {
+                    scorers.add(value.trim());
                 }
             }
         }
@@ -217,49 +160,36 @@ final class Fixture {
     }
 
     String matchTitle() {
+        String home =
+                homeName.isEmpty() ? "TBD" : homeName;
 
-        String home = homeName.isEmpty()
-                ? "TBD"
-                : homeName;
-
-        String away = awayName.isEmpty()
-                ? "TBD"
-                : awayName;
+        String away =
+                awayName.isEmpty() ? "TBD" : awayName;
 
         return home + " vs " + away;
     }
 
     String scoreTitle() {
-
         if (homeGoals >= 0 && awayGoals >= 0) {
-
-            String home = homeName.isEmpty()
-                    ? "TBD"
-                    : homeName;
-
-            String away = awayName.isEmpty()
-                    ? "TBD"
-                    : awayName;
-
-            return home
+            return homeName
                     + " "
                     + homeGoals
                     + " - "
                     + awayGoals
                     + " "
-                    + away;
+                    + awayName;
         }
 
         return matchTitle();
     }
 
     String dateLine() {
-
         if (timestampSeconds <= 0) {
             return "Time TBD";
         }
 
-        Date date = new Date(timestampSeconds * 1000L);
+        Date date =
+                new Date(timestampSeconds * 1000L);
 
         DateFormat format =
                 new SimpleDateFormat(
@@ -275,7 +205,6 @@ final class Fixture {
     }
 
     String locationLine() {
-
         if (venue.isEmpty() && city.isEmpty()) {
             return "";
         }
@@ -291,10 +220,16 @@ final class Fixture {
         return venue + ", " + city;
     }
 
+    String competitionLine() {
+        return competition;
+    }
+
+    String roundLine() {
+        return round;
+    }
+
     String statusLine() {
-
         if (isLive()) {
-
             String clock =
                     elapsed > 0
                             ? " - " + elapsed + "'"
@@ -312,8 +247,12 @@ final class Fixture {
         return dateLine();
     }
 
-    boolean isLive() {
+    boolean hasScorers() {
+        return !homeScorers.isEmpty()
+                || !awayScorers.isEmpty();
+    }
 
+    boolean isLive() {
         return "1H".equals(statusShort)
                 || "HT".equals(statusShort)
                 || "2H".equals(statusShort)
@@ -325,28 +264,18 @@ final class Fixture {
     }
 
     boolean isFinished() {
-
         return "FT".equals(statusShort)
                 || "AET".equals(statusShort)
                 || "PEN".equals(statusShort);
     }
 
     boolean isUpcoming() {
-
         return !isLive() && !isFinished();
     }
 
-    boolean hasScorers() {
-
-        return !homeScorers.isEmpty()
-                || !awayScorers.isEmpty();
-    }
-
     private static String clean(String value) {
-
         if (value == null
                 || "null".equalsIgnoreCase(value)) {
-
             return "";
         }
 
@@ -357,15 +286,8 @@ final class Fixture {
             String date,
             String time
     ) {
-
         try {
-
-            String cleanDate = clean(date);
             String cleanTime = clean(time);
-
-            if (cleanDate.isEmpty()) {
-                return 0;
-            }
 
             String[] parts =
                     cleanTime.split(" ");
@@ -396,7 +318,7 @@ final class Fixture {
 
             Date parsed =
                     format.parse(
-                            cleanDate
+                            clean(date)
                                     + " "
                                     + clock
                     );
@@ -406,13 +328,13 @@ final class Fixture {
                     : parsed.getTime() / 1000L;
 
         } catch (Exception ignored) {
-
             return 0;
         }
     }
 
-    private static String toGmtZone(String zone) {
-
+    private static String toGmtZone(
+            String zone
+    ) {
         String cleanZone =
                 clean(zone)
                         .replace("UTC", "GMT");
@@ -441,16 +363,16 @@ final class Fixture {
         return "GMT" + offset;
     }
 
-    private static long stableId(JSONObject item) {
-
+    private static long stableId(
+            JSONObject item
+    ) {
         String seed =
                 item.optString("date")
                         + item.optString("time")
                         + item.optString("team1")
                         + item.optString("team2")
-                        + item.optString("round")
-                        + item.optString("competition");
+                        + item.optString("round");
 
-        return Math.abs((long) seed.hashCode());
+        return Math.abs(seed.hashCode());
     }
 }
