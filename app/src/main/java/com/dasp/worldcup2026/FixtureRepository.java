@@ -409,7 +409,7 @@ final class FixtureRepository {
                                         "awayName"
                                 ),
 
-                                item.optInt(
+                                item.optString(
                                         "homeGoals",
                                         -1
                                 ),
