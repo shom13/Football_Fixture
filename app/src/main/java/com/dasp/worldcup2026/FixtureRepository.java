@@ -25,7 +25,8 @@ import java.util.TimeZone;
 
 final class FixtureRepository {
 
-    static final long UPDATE_INTERVAL_MS = 24L * 60L * 60L * 1000L;
+    static final long UPDATE_INTERVAL_MS =
+            24L * 60L * 60L * 1000L;
 
     private static final String PREFS = "fixtures";
     private static final String CACHE = "cache";
@@ -33,13 +34,17 @@ final class FixtureRepository {
     private static final String LAST_ERROR = "last_error";
 
     /*
-     * OpenFootball sources.
+     * OpenFootball data sources.
      *
-     * IMPORTANT:
      * These are DATA SOURCES only.
-     * No match information is hardcoded here.
+     * No individual matches are hardcoded.
      *
-     * Each source is allowed to fail independently.
+     * The league repositories provide the Football.TXT
+     * source data. Their generated JSON files follow the
+     * OpenFootball matches[] structure.
+     *
+     * World Cup uses the official OpenFootball JSON dataset,
+     * which also contains goals1/goals2 when available.
      */
     private static final Source[] SOURCES = {
 
@@ -78,7 +83,9 @@ final class FixtureRepository {
     private final SharedPreferences preferences;
 
     FixtureRepository(Context context) {
-        this.context = context.getApplicationContext();
+        this.context =
+                context.getApplicationContext();
+
         this.preferences =
                 this.context.getSharedPreferences(
                         PREFS,
@@ -89,13 +96,19 @@ final class FixtureRepository {
     List<Fixture> cachedFixtures() {
 
         String cached =
-                preferences.getString(CACHE, "");
+                preferences.getString(
+                        CACHE,
+                        ""
+                );
 
-        if (cached == null || cached.trim().isEmpty()) {
+        if (cached == null
+                || cached.trim().isEmpty()) {
+
             return new ArrayList<>();
         }
 
         try {
+
             JSONArray array =
                     new JSONArray(cached);
 
@@ -119,12 +132,9 @@ final class FixtureRepository {
             return true;
         }
 
-        /*
-         * Refresh once every 24 hours.
-         */
         return System.currentTimeMillis()
                 - lastUpdate
-                >= 24L * 60L * 60L * 1000L;
+                >= UPDATE_INTERVAL_MS;
     }
 
     List<Fixture> refreshIfStale()
@@ -157,20 +167,28 @@ final class FixtureRepository {
 
             } catch (Exception exception) {
 
+                String message =
+                        exception.getMessage();
+
+                if (message == null
+                        || message.trim().isEmpty()) {
+
+                    message =
+                            exception.getClass()
+                                    .getSimpleName();
+                }
+
                 errors.add(
                         source.name
                                 + ": "
-                                + exception.getMessage()
+                                + message
                 );
             }
         }
 
         /*
-         * We only replace the cache if at least one
-         * source successfully returned usable data.
-         *
-         * This prevents one broken endpoint from
-         * wiping the entire application.
+         * At least one source must provide usable data
+         * before replacing the existing cache.
          */
         if (!all.isEmpty()) {
 
@@ -198,8 +216,8 @@ final class FixtureRepository {
         }
 
         /*
-         * Nothing could be downloaded.
-         * Keep the previous cache.
+         * Do not destroy a previously working cache
+         * just because the network failed.
          */
         throw new Exception(
                 errors.isEmpty()
@@ -223,6 +241,7 @@ final class FixtureRepository {
                 );
 
         if (lastUpdate <= 0) {
+
             return "OpenFootball data not yet downloaded";
         }
 
@@ -278,22 +297,36 @@ final class FixtureRepository {
                 new JSONObject(json);
 
         /*
-         * Most OpenFootball JSON datasets use
-         * a "matches" array.
+         * Standard OpenFootball JSON:
+         *
+         * {
+         *   "name": "...",
+         *   "matches": [...]
+         * }
          */
         JSONArray matches =
                 root.optJSONArray("matches");
 
-        /*
-         * Some datasets may themselves be arrays.
-         */
         if (matches == null) {
-
-            return parseJsonArray(
-                    root,
-                    competition
+            throw new Exception(
+                    "No matches array"
             );
         }
+
+        /*
+         * Prefer the competition name supplied
+         * by the dataset itself.
+         */
+        String datasetName =
+                root.optString(
+                        "name",
+                        ""
+                ).trim();
+
+        String actualCompetition =
+                datasetName.isEmpty()
+                        ? competition
+                        : competitionName(datasetName);
 
         for (int i = 0;
              i < matches.length();
@@ -309,7 +342,7 @@ final class FixtureRepository {
             Fixture fixture =
                     parseFixture(
                             item,
-                            competition
+                            actualCompetition
                     );
 
             if (fixture != null) {
@@ -320,40 +353,18 @@ final class FixtureRepository {
         return result;
     }
 
-    private List<Fixture> parseJsonArray(
-            JSONObject root,
-            String competition
-    ) {
-
-        return new ArrayList<>();
-    }
-
     private Fixture parseFixture(
             JSONObject item,
             String competition
     ) {
 
-        /*
-         * We deliberately pass the source object
-         * to Fixture rather than inserting football
-         * information here.
-         */
-        JSONObject copy =
-                new JSONObject();
-
         try {
 
-            copy = new JSONObject(
-                    item.toString()
-            );
+            JSONObject copy =
+                    new JSONObject(
+                            item.toString()
+                    );
 
-            /*
-             * Competition comes from the SOURCE
-             * configuration, not from a hardcoded match.
-             *
-             * If the source itself provides competition,
-             * keep that value.
-             */
             if (!copy.has("competition")
                     || copy.optString(
                     "competition"
@@ -409,11 +420,20 @@ final class FixtureRepository {
                                 )
                         );
 
+                /*
+                 * IMPORTANT:
+                 *
+                 * This order must match the NEW Fixture
+                 * constructor exactly.
+                 */
                 Fixture fixture =
                         new Fixture(
                                 item.optLong("id"),
                                 item.optLong(
                                         "timestampSeconds"
+                                ),
+                                item.optString(
+                                        "competition"
                                 ),
                                 item.optString(
                                         "round"
@@ -447,9 +467,6 @@ final class FixtureRepository {
                                 item.optInt(
                                         "elapsed"
                                 ),
-                                item.optString(
-                                        "competition"
-                                ),
                                 homeScorers,
                                 awayScorers
                         );
@@ -457,6 +474,9 @@ final class FixtureRepository {
                 fixtures.add(fixture);
 
             } catch (Exception ignored) {
+                /*
+                 * Ignore only the damaged cached entry.
+                 */
             }
         }
 
@@ -487,6 +507,11 @@ final class FixtureRepository {
                 item.put(
                         "timestampSeconds",
                         fixture.timestampSeconds
+                );
+
+                item.put(
+                        "competition",
+                        fixture.competition
                 );
 
                 item.put(
@@ -537,11 +562,6 @@ final class FixtureRepository {
                 item.put(
                         "elapsed",
                         fixture.elapsed
-                );
-
-                item.put(
-                        "competition",
-                        fixture.competition
                 );
 
                 item.put(
@@ -608,6 +628,7 @@ final class FixtureRepository {
         Collections.sort(
                 fixtures,
                 new Comparator<Fixture>() {
+
                     @Override
                     public int compare(
                             Fixture a,
@@ -653,6 +674,11 @@ final class FixtureRepository {
 
             connection.setUseCaches(false);
 
+            connection.setRequestProperty(
+                    "User-Agent",
+                    "Football-Fixture/1.0"
+            );
+
             int response =
                     connection.getResponseCode();
 
@@ -660,8 +686,7 @@ final class FixtureRepository {
                     || response >= 300) {
 
                 throw new Exception(
-                        "HTTP "
-                                + response
+                        "HTTP " + response
                 );
             }
 
@@ -717,14 +742,80 @@ final class FixtureRepository {
              i++) {
 
             String value =
-                    array.optString(i, "");
+                    array.optString(
+                            i,
+                            ""
+                    );
 
-            if (!value.isEmpty()) {
-                result.add(value);
+            if (!value.trim().isEmpty()) {
+                result.add(value.trim());
             }
         }
 
         return result;
+    }
+
+    private static String competitionName(
+            String datasetName
+    ) {
+
+        String value =
+                datasetName.trim();
+
+        /*
+         * Keep the short competition labels used
+         * by the app rather than displaying the
+         * season suffix from the JSON dataset.
+         */
+        if (value.toLowerCase(
+                Locale.US
+        ).contains("premier league")) {
+
+            return "Premier League";
+        }
+
+        if (value.toLowerCase(
+                Locale.US
+        ).contains("primera división")
+                || value.toLowerCase(
+                Locale.US
+        ).contains("primera division")
+                || value.toLowerCase(
+                Locale.US
+        ).contains("la liga")) {
+
+            return "La Liga";
+        }
+
+        if (value.toLowerCase(
+                Locale.US
+        ).contains("bundesliga")) {
+
+            return "Bundesliga";
+        }
+
+        if (value.toLowerCase(
+                Locale.US
+        ).contains("serie a")) {
+
+            return "Serie A";
+        }
+
+        if (value.toLowerCase(
+                Locale.US
+        ).contains("champions league")) {
+
+            return "Champions League";
+        }
+
+        if (value.toLowerCase(
+                Locale.US
+        ).contains("world cup")) {
+
+            return "FIFA World Cup";
+        }
+
+        return value;
     }
 
     private String joinErrors(
