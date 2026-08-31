@@ -25,6 +25,8 @@ import java.util.TimeZone;
 
 final class FixtureRepository {
 
+    static final long UPDATE_INTERVAL_MS = 24L * 60L * 60L * 1000L;
+
     private static final String PREFS = "fixtures";
     private static final String CACHE = "cache";
     private static final String LAST_UPDATE = "last_update";
