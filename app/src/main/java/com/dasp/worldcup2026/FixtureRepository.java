@@ -34,36 +34,39 @@ final class FixtureRepository {
     private static final String LAST_ERROR = "last_error";
 
     /*
-     * These are DATA SOURCES.
+     * OpenFootball sources.
      *
-     * No matches, teams, scores or dates are hardcoded.
+     * IMPORTANT:
+     * These are DATA SOURCES only.
+     * No match information is hardcoded here.
      *
-     * The domestic competitions use the official
-     * OpenFootball football.json datasets.
-     *
-     * World Cup uses the dedicated OpenFootball
-     * worldcup.json dataset.
+     * Each source is allowed to fail independently.
      */
     private static final Source[] SOURCES = {
 
             new Source(
                     "Premier League",
-                    "https://raw.githubusercontent.com/openfootball/football.json/master/2026-27/en.1.json"
-            ),
-
-            new Source(
-                    "Bundesliga",
-                    "https://raw.githubusercontent.com/openfootball/football.json/master/2026-27/de.1.json"
+                    "https://raw.githubusercontent.com/openfootball/england/master/2026-27/1-premierleague.json"
             ),
 
             new Source(
                     "La Liga",
-                    "https://raw.githubusercontent.com/openfootball/football.json/master/2026-27/es.1.json"
+                    "https://raw.githubusercontent.com/openfootball/espana/master/2026-27/1-liga.json"
+            ),
+
+            new Source(
+                    "Bundesliga",
+                    "https://raw.githubusercontent.com/openfootball/deutschland/master/2026-27/1-bundesliga.json"
             ),
 
             new Source(
                     "Serie A",
-                    "https://raw.githubusercontent.com/openfootball/football.json/master/2026-27/it.1.json"
+                    "https://raw.githubusercontent.com/openfootball/italy/master/2026-27/1-seriea.json"
+            ),
+
+            new Source(
+                    "Champions League",
+                    "https://raw.githubusercontent.com/openfootball/champions-league/master/2026-27/cl.json"
             ),
 
             new Source(
@@ -78,7 +81,7 @@ final class FixtureRepository {
     FixtureRepository(Context context) {
         this.context = context.getApplicationContext();
 
-        preferences =
+        this.preferences =
                 this.context.getSharedPreferences(
                         PREFS,
                         Context.MODE_PRIVATE
@@ -88,19 +91,24 @@ final class FixtureRepository {
     List<Fixture> cachedFixtures() {
 
         String cached =
-                preferences.getString(CACHE, "");
+                preferences.getString(
+                        CACHE,
+                        ""
+                );
 
         if (cached == null || cached.trim().isEmpty()) {
             return new ArrayList<>();
         }
 
         try {
+
             JSONArray array =
                     new JSONArray(cached);
 
             return parseCachedArray(array);
 
         } catch (Exception ignored) {
+
             return new ArrayList<>();
         }
     }
@@ -155,26 +163,24 @@ final class FixtureRepository {
                 String message =
                         exception.getMessage();
 
-                if (message == null
-                        || message.trim().isEmpty()) {
-
-                    message = "Unknown error";
-                }
-
                 errors.add(
                         source.name
                                 + ": "
-                                + message
+                                + (
+                                message == null
+                                        ? "Unknown error"
+                                        : message
+                        )
                 );
             }
         }
 
         /*
-         * Never destroy working cached data because
-         * one endpoint failed.
+         * Only replace the cache if at least one
+         * source successfully returned usable data.
          *
-         * We only replace the cache when at least
-         * one source successfully supplied fixtures.
+         * This prevents one broken endpoint from
+         * wiping the entire application.
          */
         if (!all.isEmpty()) {
 
@@ -200,6 +206,10 @@ final class FixtureRepository {
             return all;
         }
 
+        /*
+         * Nothing could be downloaded.
+         * Keep the previous cache.
+         */
         throw new Exception(
                 errors.isEmpty()
                         ? "No fixture data available"
@@ -246,7 +256,8 @@ final class FixtureRepository {
         if (error != null
                 && !error.trim().isEmpty()) {
 
-            line += " • Some sources unavailable";
+            line +=
+                    " • Some sources unavailable";
         }
 
         return line;
@@ -269,6 +280,14 @@ final class FixtureRepository {
             String competition
     ) throws Exception {
 
+        List<Fixture> result =
+                new ArrayList<>();
+
+        /*
+         * OpenFootball datasets normally use
+         * a top-level JSON object containing
+         * a "matches" array.
+         */
         JSONObject root =
                 new JSONObject(json);
 
@@ -276,13 +295,8 @@ final class FixtureRepository {
                 root.optJSONArray("matches");
 
         if (matches == null) {
-            throw new Exception(
-                    "Source contains no matches array"
-            );
+            return result;
         }
-
-        List<Fixture> result =
-                new ArrayList<>();
 
         for (int i = 0;
              i < matches.length();
@@ -322,10 +336,10 @@ final class FixtureRepository {
                     );
 
             /*
-             * Competition is metadata supplied by
-             * the configured source.
+             * Competition comes from the source
+             * configuration.
              *
-             * It is NOT match information.
+             * This does NOT hardcode a match.
              */
             if (!copy.has("competition")
                     || copy.optString(
@@ -343,6 +357,7 @@ final class FixtureRepository {
             );
 
         } catch (Exception ignored) {
+
             return null;
         }
     }
@@ -383,7 +398,9 @@ final class FixtureRepository {
 
                 Fixture fixture =
                         new Fixture(
-                                item.optLong("id"),
+                                item.optLong(
+                                        "id"
+                                ),
 
                                 item.optLong(
                                         "timestampSeconds"
@@ -409,7 +426,7 @@ final class FixtureRepository {
                                         "awayName"
                                 ),
 
-                                item.optString(
+                                item.optInt(
                                         "homeGoals",
                                         -1
                                 ),
@@ -427,8 +444,9 @@ final class FixtureRepository {
                                         "statusLong"
                                 ),
 
-                                item.optInt(
-                                        "elapsed"
+                                item.optString(
+                                        "elapsed",
+                                        ""
                                 ),
 
                                 item.optString(
@@ -436,13 +454,13 @@ final class FixtureRepository {
                                 ),
 
                                 homeScorers,
-
                                 awayScorers
                         );
 
                 fixtures.add(fixture);
 
             } catch (Exception ignored) {
+                // Ignore malformed cached entries.
             }
         }
 
@@ -547,6 +565,7 @@ final class FixtureRepository {
                 array.put(item);
 
             } catch (Exception ignored) {
+                // Ignore malformed fixture during caching.
             }
         }
 
@@ -594,6 +613,7 @@ final class FixtureRepository {
         Collections.sort(
                 fixtures,
                 new Comparator<Fixture>() {
+
                     @Override
                     public int compare(
                             Fixture a,
@@ -625,7 +645,9 @@ final class FixtureRepository {
                     (HttpURLConnection)
                             url.openConnection();
 
-            connection.setRequestMethod("GET");
+            connection.setRequestMethod(
+                    "GET"
+            );
 
             connection.setConnectTimeout(
                     15000
@@ -700,7 +722,10 @@ final class FixtureRepository {
              i++) {
 
             String value =
-                    array.optString(i, "");
+                    array.optString(
+                            i,
+                            ""
+                    );
 
             if (!value.isEmpty()) {
                 result.add(value);
