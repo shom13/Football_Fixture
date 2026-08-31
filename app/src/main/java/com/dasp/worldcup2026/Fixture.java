@@ -69,46 +69,37 @@ final class Fixture {
         this.statusLong = clean(statusLong);
         this.elapsed = elapsed;
 
-        this.homeScorers =
-                homeScorers == null
-                        ? new ArrayList<String>()
-                        : new ArrayList<>(homeScorers);
-
-        this.awayScorers =
-                awayScorers == null
-                        ? new ArrayList<String>()
-                        : new ArrayList<>(awayScorers);
+        this.homeScorers = copyList(homeScorers);
+        this.awayScorers = copyList(awayScorers);
     }
 
-    static Fixture fromOpenFootballJson(JSONObject item) {
-
-        JSONObject scoreObject = item.optJSONObject("score");
+    static Fixture fromOpenFootballJson(
+            JSONObject item,
+            String sourceCompetition
+    ) {
+        JSONObject score = item.optJSONObject("score");
 
         int homeGoals = -1;
         int awayGoals = -1;
 
-        if (scoreObject != null) {
-            JSONArray fullTime = scoreObject.optJSONArray("ft");
+        if (score != null) {
+            JSONArray ft = score.optJSONArray("ft");
 
-            if (fullTime != null && fullTime.length() >= 2) {
-                homeGoals = fullTime.optInt(0, -1);
-                awayGoals = fullTime.optInt(1, -1);
-            }
-        } else {
-            /*
-             * Some OpenFootball datasets may represent score
-             * directly as an array.
-             */
-            JSONArray directScore = item.optJSONArray("score");
-
-            if (directScore != null && directScore.length() >= 2) {
-                homeGoals = directScore.optInt(0, -1);
-                awayGoals = directScore.optInt(1, -1);
+            if (ft != null && ft.length() >= 2) {
+                homeGoals = ft.optInt(0, -1);
+                awayGoals = ft.optInt(1, -1);
             }
         }
 
         boolean finished =
                 homeGoals >= 0 && awayGoals >= 0;
+
+        String competition =
+                item.optString("competition", "");
+
+        if (competition.trim().isEmpty()) {
+            competition = sourceCompetition;
+        }
 
         List<String> homeScorers =
                 readScorers(item, "scorers1");
@@ -122,7 +113,7 @@ final class Fixture {
                         item.optString("date"),
                         item.optString("time")
                 ),
-                item.optString("competition"),
+                competition,
                 item.optString("round"),
                 item.optString("ground"),
                 item.optString("city"),
@@ -142,29 +133,38 @@ final class Fixture {
             JSONObject item,
             String key
     ) {
-        List<String> scorers = new ArrayList<>();
+        List<String> result =
+                new ArrayList<>();
 
-        JSONArray array = item.optJSONArray(key);
+        JSONArray array =
+                item.optJSONArray(key);
 
-        if (array != null) {
-            for (int i = 0; i < array.length(); i++) {
-                String value = array.optString(i, "");
+        if (array == null) {
+            return result;
+        }
 
-                if (!value.trim().isEmpty()) {
-                    scorers.add(value.trim());
-                }
+        for (int i = 0; i < array.length(); i++) {
+            String value =
+                    array.optString(i, "").trim();
+
+            if (!value.isEmpty()) {
+                result.add(value);
             }
         }
 
-        return scorers;
+        return result;
     }
 
     String matchTitle() {
         String home =
-                homeName.isEmpty() ? "TBD" : homeName;
+                homeName.isEmpty()
+                        ? "TBD"
+                        : homeName;
 
         String away =
-                awayName.isEmpty() ? "TBD" : awayName;
+                awayName.isEmpty()
+                        ? "TBD"
+                        : awayName;
 
         return home + " vs " + away;
     }
@@ -220,14 +220,6 @@ final class Fixture {
         return venue + ", " + city;
     }
 
-    String competitionLine() {
-        return competition;
-    }
-
-    String roundLine() {
-        return round;
-    }
-
     String statusLine() {
         if (isLive()) {
             String clock =
@@ -245,11 +237,6 @@ final class Fixture {
         }
 
         return dateLine();
-    }
-
-    boolean hasScorers() {
-        return !homeScorers.isEmpty()
-                || !awayScorers.isEmpty();
     }
 
     boolean isLive() {
@@ -273,6 +260,16 @@ final class Fixture {
         return !isLive() && !isFinished();
     }
 
+    private static List<String> copyList(
+            List<String> source
+    ) {
+        if (source == null) {
+            return new ArrayList<>();
+        }
+
+        return new ArrayList<>(source);
+    }
+
     private static String clean(String value) {
         if (value == null
                 || "null".equalsIgnoreCase(value)) {
@@ -290,7 +287,7 @@ final class Fixture {
             String cleanTime = clean(time);
 
             String[] parts =
-                    cleanTime.split(" ");
+                    cleanTime.split("\\s+");
 
             String clock =
                     parts.length > 0
@@ -340,14 +337,24 @@ final class Fixture {
                         .replace("UTC", "GMT");
 
         if ("GMT".equals(cleanZone)) {
-            return cleanZone;
+            return "GMT";
         }
 
-        int signIndex =
-                Math.max(
-                        cleanZone.indexOf('+'),
-                        cleanZone.indexOf('-')
-                );
+        int plus =
+                cleanZone.indexOf('+');
+
+        int minus =
+                cleanZone.indexOf('-');
+
+        int signIndex;
+
+        if (plus >= 0 && minus >= 0) {
+            signIndex = Math.min(plus, minus);
+        } else if (plus >= 0) {
+            signIndex = plus;
+        } else {
+            signIndex = minus;
+        }
 
         if (signIndex < 0) {
             return "GMT";
@@ -357,7 +364,7 @@ final class Fixture {
                 cleanZone.substring(signIndex);
 
         if (!offset.contains(":")) {
-            offset = offset + ":00";
+            offset += ":00";
         }
 
         return "GMT" + offset;
@@ -368,11 +375,15 @@ final class Fixture {
     ) {
         String seed =
                 item.optString("date")
+                        + "|"
                         + item.optString("time")
+                        + "|"
                         + item.optString("team1")
+                        + "|"
                         + item.optString("team2")
+                        + "|"
                         + item.optString("round");
 
-        return Math.abs(seed.hashCode());
+        return Math.abs((long) seed.hashCode());
     }
 }
