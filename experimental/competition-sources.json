@@ -1,0 +1,45 @@
+{
+  "branch": "feature/add-competitions",
+  "policy": "Only wire a competition into the app when an endpoint for the requested/current competition exists. Never substitute an old tournament season or hardcode matches.",
+  "requested": [
+    {
+      "name": "Championship",
+      "status": "available",
+      "source": "https://raw.githubusercontent.com/openfootball/england/master/2026-27/2-championship.txt",
+      "format": "football.txt",
+      "season": "2026-27"
+    },
+    {
+      "name": "League One",
+      "status": "not_available_for_current_season",
+      "source": null,
+      "format": "football.txt",
+      "season": "2026-27"
+    },
+    {
+      "name": "Champions League",
+      "status": "not_available_for_current_season",
+      "source": null,
+      "format": "football.txt",
+      "season": "2026-27",
+      "latest_verified_season": "2025-26",
+      "latest_verified_source": "https://raw.githubusercontent.com/openfootball/champions-league/master/2025-26/cl.txt"
+    },
+    {
+      "name": "Euro",
+      "status": "available_upcoming",
+      "source": "https://raw.githubusercontent.com/openfootball/euro.json/master/2028/euro.json",
+      "format": "json",
+      "season": "2028",
+      "note": "The published dataset currently contains placeholder team labels for the 2028 draw, so it must not be presented as real team assignments."
+    },
+    {
+      "name": "Copa America",
+      "status": "not_available_for_current_tournament",
+      "source": null,
+      "format": "football.txt",
+      "latest_verified_season": "2024",
+      "latest_verified_source": "https://github.com/openfootball/copa-america"
+    }
+  ]
+}
