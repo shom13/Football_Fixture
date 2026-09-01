@@ -77,17 +77,25 @@ final class Fixture {
             JSONObject item,
             String sourceCompetition
     ) {
-        JSONObject score = item.optJSONObject("score");
-
         int homeGoals = -1;
         int awayGoals = -1;
 
-        if (score != null) {
+        Object scoreValue = item.opt("score");
+
+        if (scoreValue instanceof JSONObject) {
+            JSONObject score = (JSONObject) scoreValue;
             JSONArray ft = score.optJSONArray("ft");
 
             if (ft != null && ft.length() >= 2) {
                 homeGoals = ft.optInt(0, -1);
                 awayGoals = ft.optInt(1, -1);
+            }
+        } else if (scoreValue instanceof JSONArray) {
+            JSONArray score = (JSONArray) scoreValue;
+
+            if (score.length() >= 2) {
+                homeGoals = score.optInt(0, -1);
+                awayGoals = score.optInt(1, -1);
             }
         }
 
@@ -102,10 +110,10 @@ final class Fixture {
         }
 
         List<String> homeScorers =
-                readScorers(item, "scorers1");
+                readScorers(item, "goals1", "scorers1");
 
         List<String> awayScorers =
-                readScorers(item, "scorers2");
+                readScorers(item, "goals2", "scorers2");
 
         return new Fixture(
                 item.optLong("num", stableId(item)),
@@ -131,24 +139,42 @@ final class Fixture {
 
     private static List<String> readScorers(
             JSONObject item,
-            String key
+            String primaryKey,
+            String fallbackKey
     ) {
-        List<String> result =
-                new ArrayList<>();
+        List<String> result = new ArrayList<>();
 
-        JSONArray array =
-                item.optJSONArray(key);
+        JSONArray array = item.optJSONArray(primaryKey);
+
+        if (array == null) {
+            array = item.optJSONArray(fallbackKey);
+        }
 
         if (array == null) {
             return result;
         }
 
         for (int i = 0; i < array.length(); i++) {
-            String value =
-                    array.optString(i, "").trim();
+            Object value = array.opt(i);
 
-            if (!value.isEmpty()) {
-                result.add(value);
+            if (value instanceof JSONObject) {
+                JSONObject goal = (JSONObject) value;
+                String name = goal.optString("name", "").trim();
+                String minute = goal.optString("minute", "").trim();
+
+                if (!name.isEmpty()) {
+                    if (!minute.isEmpty()) {
+                        result.add(name + " " + minute + "'");
+                    } else {
+                        result.add(name);
+                    }
+                }
+            } else {
+                String text = array.optString(i, "").trim();
+
+                if (!text.isEmpty()) {
+                    result.add(text);
+                }
             }
         }
 
