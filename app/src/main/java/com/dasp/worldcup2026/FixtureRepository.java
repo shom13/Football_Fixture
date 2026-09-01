@@ -28,7 +28,8 @@ final class FixtureRepository {
     static final long UPDATE_INTERVAL_MS =
             24L * 60L * 60L * 1000L;
 
-    private static final int CACHE_SCHEMA_VERSION = 2;
+    /* Increment when the source/cache contract changes. */
+    private static final int CACHE_SCHEMA_VERSION = 3;
 
     private static final String PREFS = "fixtures";
     private static final String CACHE = "cache";
@@ -37,14 +38,8 @@ final class FixtureRepository {
     private static final String CACHE_SCHEMA = "cache_schema";
 
     /*
-     * These are verified OpenFootball JSON datasets.
-     * No individual match is hardcoded anywhere.
-     *
-     * Current 2026 data exists for the four requested domestic
-     * leagues and the 2026 FIFA World Cup.
-     *
-     * We do not invent current-season URLs for competitions where
-     * OpenFootball does not currently provide a matching JSON dataset.
+     * OpenFootball's current 2026/27 JSON datasets.
+     * These are data sources only; no individual match is hardcoded.
      */
     private static final Source[] SOURCES = {
             new Source(
