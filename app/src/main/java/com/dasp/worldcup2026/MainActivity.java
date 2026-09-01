@@ -11,13 +11,13 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
-import java.text.SimpleDateFormat;
 import java.util.TimeZone;
 
 public final class MainActivity extends Activity {
@@ -185,6 +185,8 @@ public final class MainActivity extends Activity {
         if (visible.isEmpty()) {
             addEmptyState();
         } else {
+            addSectionHeader(visible);
+
             for (Fixture fixture : visible) {
                 list.addView(card(fixture), matchWrap());
             }
@@ -193,21 +195,14 @@ public final class MainActivity extends Activity {
         status.setText(repository.dataSourceLine());
     }
 
-    /**
-     * The three views are calculated entirely from the downloaded fixtures.
-     * Nothing about individual matches or dates is hardcoded.
+    /*
+     * Today = every fixture whose source date is today's date.
+     * Upcoming = every fixture on the nearest future source date.
+     * Results = every completed fixture on the latest past source date
+     * containing completed fixtures.
      *
-     * Today:
-     *   Every fixture whose source date is today's date in the app's
-     *   current calendar.
-     *
-     * Upcoming:
-     *   Every fixture on the nearest future source date for which at least
-     *   one fixture exists. Empty calendar days are skipped automatically.
-     *
-     * Results:
-     *   Every completed fixture on the most recent past source date that
-     *   contains completed fixtures.
+     * All three are calculated from downloaded endpoint data. No match,
+     * date or round is hardcoded here.
      */
     private List<Fixture> filtered() {
         if (FILTER_TODAY.equals(filter)) {
@@ -329,8 +324,10 @@ public final class MainActivity extends Activity {
     }
 
     private SimpleDateFormat createDayFormat() {
-        SimpleDateFormat format =
-                new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+        SimpleDateFormat format = new SimpleDateFormat(
+                "yyyy-MM-dd",
+                Locale.US
+        );
         format.setTimeZone(TimeZone.getTimeZone("Asia/Kolkata"));
         format.setLenient(false);
         return format;
@@ -349,6 +346,56 @@ public final class MainActivity extends Activity {
                     }
                 }
         );
+    }
+
+    private void addSectionHeader(List<Fixture> visible) {
+        if (visible.isEmpty()) {
+            return;
+        }
+
+        String date = dateKey(visible.get(0));
+        String heading = formatSectionDate(date);
+
+        String label;
+        if (FILTER_TODAY.equals(filter)) {
+            label = "TODAY";
+        } else if (FILTER_UPCOMING.equals(filter)) {
+            label = "UPCOMING";
+        } else {
+            label = "RESULTS";
+        }
+
+        TextView header = text(
+                label + " • " + heading,
+                13,
+                R.color.muted,
+                true
+        );
+        header.setPadding(0, 0, 0, dp(10));
+        list.addView(header, matchWrap());
+    }
+
+    private String formatSectionDate(String isoDate) {
+        try {
+            SimpleDateFormat source = new SimpleDateFormat(
+                    "yyyy-MM-dd",
+                    Locale.US
+            );
+            source.setLenient(false);
+
+            Date date = source.parse(isoDate);
+            if (date == null) {
+                return isoDate;
+            }
+
+            SimpleDateFormat output = new SimpleDateFormat(
+                    "d MMM yyyy",
+                    Locale.US
+            );
+            return output.format(date);
+        } catch (Exception ignored) {
+            return isoDate;
+        }
     }
 
     private View card(Fixture fixture) {
@@ -386,6 +433,31 @@ public final class MainActivity extends Activity {
         match.setPadding(0, dp(4), 0, dp(4));
         card.addView(match, matchWrap());
 
+        if (fixture.hasScorers()) {
+            String homeScorers = scorerLine(fixture.homeScorers);
+            String awayScorers = scorerLine(fixture.awayScorers);
+
+            if (!homeScorers.isEmpty()) {
+                TextView scorers = text(
+                        fixture.homeName + ": " + homeScorers,
+                        12,
+                        R.color.muted,
+                        false
+                );
+                card.addView(scorers, matchWrap());
+            }
+
+            if (!awayScorers.isEmpty()) {
+                TextView scorers = text(
+                        fixture.awayName + ": " + awayScorers,
+                        12,
+                        R.color.muted,
+                        false
+                );
+                card.addView(scorers, matchWrap());
+            }
+        }
+
         String locationLine = fixture.locationLine();
         if (!locationLine.isEmpty()) {
             TextView location = text(
@@ -394,6 +466,7 @@ public final class MainActivity extends Activity {
                     R.color.muted,
                     false
             );
+            location.setPadding(0, dp(4), 0, 0);
             card.addView(location, matchWrap());
         }
 
@@ -413,6 +486,28 @@ public final class MainActivity extends Activity {
         card.setLayoutParams(params);
 
         return card;
+    }
+
+    private String scorerLine(List<String> scorers) {
+        if (scorers == null || scorers.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder builder = new StringBuilder();
+
+        for (String scorer : scorers) {
+            if (scorer == null || scorer.trim().isEmpty()) {
+                continue;
+            }
+
+            if (builder.length() > 0) {
+                builder.append(", ");
+            }
+
+            builder.append(scorer.trim());
+        }
+
+        return builder.toString();
     }
 
     private void addEmptyState() {
