@@ -28,23 +28,23 @@ final class FixtureRepository {
     static final long UPDATE_INTERVAL_MS =
             24L * 60L * 60L * 1000L;
 
+    private static final int CACHE_SCHEMA_VERSION = 2;
+
     private static final String PREFS = "fixtures";
     private static final String CACHE = "cache";
     private static final String LAST_UPDATE = "last_update";
     private static final String LAST_ERROR = "last_error";
+    private static final String CACHE_SCHEMA = "cache_schema";
 
     /*
-     * These are OpenFootball JSON datasets.
-     * No individual match is hardcoded anywhere in the app.
+     * These are verified OpenFootball JSON datasets.
+     * No individual match is hardcoded anywhere.
      *
-     * OpenFootball currently provides the four requested
-     * domestic leagues through football.json and the 2026
-     * World Cup through worldcup.json.
+     * Current 2026 data exists for the four requested domestic
+     * leagues and the 2026 FIFA World Cup.
      *
-     * Champions League, Euro and Copa America are deliberately
-     * not represented by invented URLs here. If OpenFootball
-     * provides a usable current JSON dataset for them, it can be
-     * added as another Source without changing the rest of the app.
+     * We do not invent current-season URLs for competitions where
+     * OpenFootball does not currently provide a matching JSON dataset.
      */
     private static final Source[] SOURCES = {
             new Source(
@@ -95,6 +95,12 @@ final class FixtureRepository {
     }
 
     boolean isStale() {
+        int schema = preferences.getInt(CACHE_SCHEMA, 0);
+
+        if (schema != CACHE_SCHEMA_VERSION) {
+            return true;
+        }
+
         long lastUpdate = preferences.getLong(LAST_UPDATE, 0L);
 
         if (lastUpdate <= 0L) {
@@ -119,15 +125,18 @@ final class FixtureRepository {
                 all.addAll(parsed);
             } catch (Exception exception) {
                 String message = exception.getMessage();
+
                 if (message == null || message.trim().isEmpty()) {
                     message = exception.getClass().getSimpleName();
                 }
+
                 errors.add(source.name + ": " + message);
             }
         }
 
         if (all.isEmpty()) {
             saveError(joinErrors(errors));
+
             throw new Exception(
                     errors.isEmpty()
                             ? "No fixture data available"
@@ -143,6 +152,7 @@ final class FixtureRepository {
 
         preferences.edit()
                 .putLong(LAST_UPDATE, System.currentTimeMillis())
+                .putInt(CACHE_SCHEMA, CACHE_SCHEMA_VERSION)
                 .apply();
 
         return all;
@@ -190,6 +200,7 @@ final class FixtureRepository {
         }
 
         JSONObject root;
+
         try {
             root = new JSONObject(json);
         } catch (Exception exception) {
@@ -251,6 +262,8 @@ final class FixtureRepository {
                 long id = item.optLong("id", 0L);
                 long timestampSeconds = item.optLong("timestampSeconds", 0L);
 
+                String sourceDate = item.optString("sourceDate", "");
+                String sourceTime = item.optString("sourceTime", "");
                 String competition = item.optString("competition", "");
                 String round = item.optString("round", "");
                 String venue = item.optString("venue", "");
@@ -283,6 +296,8 @@ final class FixtureRepository {
                 fixtures.add(new Fixture(
                         id,
                         timestampSeconds,
+                        sourceDate,
+                        sourceTime,
                         competition,
                         round,
                         venue,
@@ -315,6 +330,8 @@ final class FixtureRepository {
             try {
                 item.put("id", fixture.id);
                 item.put("timestampSeconds", fixture.timestampSeconds);
+                item.put("sourceDate", fixture.sourceDate);
+                item.put("sourceTime", fixture.sourceTime);
                 item.put("competition", fixture.competition);
                 item.put("round", fixture.round);
                 item.put("venue", fixture.venue);
@@ -449,6 +466,7 @@ final class FixtureRepository {
             if (builder.length() > 0) {
                 builder.append("; ");
             }
+
             builder.append(error);
         }
 
