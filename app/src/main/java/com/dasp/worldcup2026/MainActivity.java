@@ -11,13 +11,13 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.text.SimpleDateFormat;
 import java.util.TimeZone;
 
 public final class MainActivity extends Activity {
@@ -198,15 +198,16 @@ public final class MainActivity extends Activity {
      * Nothing about individual matches or dates is hardcoded.
      *
      * Today:
-     *   Every fixture whose source date falls on today's date in India.
+     *   Every fixture whose source date is today's date in the app's
+     *   current calendar.
      *
      * Upcoming:
-     *   Every fixture on the nearest future date for which at least one
-     *   fixture exists. This deliberately skips empty calendar days.
+     *   Every fixture on the nearest future source date for which at least
+     *   one fixture exists. Empty calendar days are skipped automatically.
      *
      * Results:
-     *   Every completed fixture on the most recent past fixture date.
-     *   This is the previous matchday represented by the downloaded data.
+     *   Every completed fixture on the most recent past source date that
+     *   contains completed fixtures.
      */
     private List<Fixture> filtered() {
         if (FILTER_TODAY.equals(filter)) {
@@ -233,15 +234,11 @@ public final class MainActivity extends Activity {
     private List<Fixture> fixturesForDate(String wantedDate) {
         List<Fixture> result = new ArrayList<>();
 
-        if (wantedDate == null) {
+        if (wantedDate == null || wantedDate.isEmpty()) {
             return result;
         }
 
         for (Fixture fixture : fixtures) {
-            if (fixture.timestampSeconds <= 0L) {
-                continue;
-            }
-
             if (wantedDate.equals(dateKey(fixture))) {
                 result.add(fixture);
             }
@@ -254,15 +251,11 @@ public final class MainActivity extends Activity {
     private List<Fixture> completedFixturesForDate(String wantedDate) {
         List<Fixture> result = new ArrayList<>();
 
-        if (wantedDate == null) {
+        if (wantedDate == null || wantedDate.isEmpty()) {
             return result;
         }
 
         for (Fixture fixture : fixtures) {
-            if (fixture.timestampSeconds <= 0L) {
-                continue;
-            }
-
             if (wantedDate.equals(dateKey(fixture))
                     && fixture.isFinished()) {
                 result.add(fixture);
@@ -278,13 +271,9 @@ public final class MainActivity extends Activity {
         String nearest = null;
 
         for (Fixture fixture : fixtures) {
-            if (fixture.timestampSeconds <= 0L) {
-                continue;
-            }
-
             String date = dateKey(fixture);
 
-            if (date.compareTo(today) <= 0) {
+            if (date.isEmpty() || date.compareTo(today) <= 0) {
                 continue;
             }
 
@@ -301,14 +290,13 @@ public final class MainActivity extends Activity {
         String previous = null;
 
         for (Fixture fixture : fixtures) {
-            if (fixture.timestampSeconds <= 0L
-                    || !fixture.isFinished()) {
+            if (!fixture.isFinished()) {
                 continue;
             }
 
             String date = dateKey(fixture);
 
-            if (date.compareTo(today) >= 0) {
+            if (date.isEmpty() || date.compareTo(today) >= 0) {
                 continue;
             }
 
@@ -327,6 +315,12 @@ public final class MainActivity extends Activity {
     }
 
     private String dateKey(Fixture fixture) {
+        String sourceDate = fixture.dateKey();
+
+        if (!sourceDate.isEmpty()) {
+            return sourceDate;
+        }
+
         synchronized (dayFormat) {
             return dayFormat.format(
                     new Date(fixture.timestampSeconds * 1000L)
