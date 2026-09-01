@@ -7,6 +7,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
@@ -14,6 +15,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
@@ -28,7 +30,7 @@ import java.util.regex.Pattern;
 final class FixtureRepository {
 
     static final long UPDATE_INTERVAL_MS = 24L * 60L * 60L * 1000L;
-    private static final int CACHE_SCHEMA_VERSION = 4;
+    private static final int CACHE_SCHEMA_VERSION = 5;
 
     private static final String PREFS = "fixtures";
     private static final String CACHE = "cache";
@@ -36,7 +38,11 @@ final class FixtureRepository {
     private static final String LAST_ERROR = "last_error";
     private static final String CACHE_SCHEMA = "cache_schema";
 
-    /* OpenFootball's maintained 2026/27 Football.TXT datasets. */
+    /*
+     * Only sources that currently exist and can provide data for the app's
+     * requested competitions are included. A missing future-season source is
+     * not replaced with a guessed URL or hardcoded fixtures.
+     */
     private static final Source[] SOURCES = {
             new Source("Premier League", "https://raw.githubusercontent.com/openfootball/england/master/2026-27/1-premierleague.txt"),
             new Source("La Liga", "https://raw.githubusercontent.com/openfootball/espana/master/2026-27/1-liga.txt"),
@@ -45,9 +51,18 @@ final class FixtureRepository {
             new Source("FIFA World Cup", "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json")
     };
 
-    private static final Pattern DATE_PATTERN = Pattern.compile("^\\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\\s+([A-Z][a-z]{2})\\s+(\\d{1,2})(?:\\s+(\\d{4}))?\\s*$");
-    private static final Pattern MATCH_PATTERN = Pattern.compile("^\\s*(\\d{1,2}:\\d{2})\\s+(.+?)\\s+v\\s+(.+?)(?:\\s+(\\d+)\\s*-\\s*(\\d+)(?:\\s*\\([^)]*\\))?)?\\s*$");
-    private static final Pattern ROUND_PATTERN = Pattern.compile("^\\s*▪\\s*(.+?)\\s*$");
+    private static final Pattern DATE_PATTERN = Pattern.compile(
+            "^\\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\\s+([A-Z][a-z]{2})\\s+(\\d{1,2})(?:\\s+(\\d{4}))?\\s*$"
+    );
+
+    /* OpenFootball omits repeated times on subsequent matches of a day. */
+    private static final Pattern MATCH_PATTERN = Pattern.compile(
+            "^\\s*(?:(\\d{1,2}:\\d{2})\\s+)?(.+?)\\s+v\\s+(.+?)(?:\\s+(\\d+)\\s*-\\s*(\\d+)(?:\\s*\\([^)]*\\))?)?(?:\\s+@\\s+(.+?))?\\s*$"
+    );
+
+    private static final Pattern ROUND_PATTERN = Pattern.compile(
+            "^\\s*▪\\s*(.+?)\\s*$"
+    );
 
     private final SharedPreferences preferences;
 
@@ -58,7 +73,10 @@ final class FixtureRepository {
 
     List<Fixture> cachedFixtures() {
         String cached = preferences.getString(CACHE, "");
-        if (cached == null || cached.trim().isEmpty()) return new ArrayList<>();
+        if (cached == null || cached.trim().isEmpty()) {
+            return new ArrayList<>();
+        }
+
         try {
             return parseCachedArray(new JSONArray(cached));
         } catch (Exception ignored) {
@@ -67,13 +85,19 @@ final class FixtureRepository {
     }
 
     boolean isStale() {
-        if (preferences.getInt(CACHE_SCHEMA, 0) != CACHE_SCHEMA_VERSION) return true;
+        if (preferences.getInt(CACHE_SCHEMA, 0) != CACHE_SCHEMA_VERSION) {
+            return true;
+        }
+
         long last = preferences.getLong(LAST_UPDATE, 0L);
-        return last <= 0L || System.currentTimeMillis() - last >= UPDATE_INTERVAL_MS;
+        return last <= 0L
+                || System.currentTimeMillis() - last >= UPDATE_INTERVAL_MS;
     }
 
     List<Fixture> refreshIfStale() throws Exception {
-        if (!isStale()) return cachedFixtures();
+        if (!isStale()) {
+            return cachedFixtures();
+        }
 
         List<Fixture> all = new ArrayList<>();
         List<String> errors = new ArrayList<>();
@@ -82,80 +106,133 @@ final class FixtureRepository {
             try {
                 String raw = download(source.url);
                 List<Fixture> parsed;
+
                 if (source.url.endsWith(".txt")) {
                     parsed = parseFootballText(raw, source.name);
                 } else {
                     parsed = parseJson(raw, source.name);
                 }
+
                 all.addAll(parsed);
             } catch (Exception e) {
                 String message = e.getMessage();
-                if (message == null || message.trim().isEmpty()) message = e.getClass().getSimpleName();
+                if (message == null || message.trim().isEmpty()) {
+                    message = e.getClass().getSimpleName();
+                }
                 errors.add(source.name + ": " + message);
             }
         }
 
         if (all.isEmpty()) {
             saveError(joinErrors(errors));
-            throw new Exception(errors.isEmpty() ? "No fixture data available" : joinErrors(errors));
+            throw new Exception(
+                    errors.isEmpty()
+                            ? "No fixture data available"
+                            : joinErrors(errors)
+            );
         }
 
         all = deduplicate(all);
         sortFixtures(all);
         saveFixtures(all);
         saveError(errors.isEmpty() ? "" : joinErrors(errors));
+
         preferences.edit()
                 .putLong(LAST_UPDATE, System.currentTimeMillis())
                 .putInt(CACHE_SCHEMA, CACHE_SCHEMA_VERSION)
                 .apply();
+
         return all;
     }
 
     String dataSourceLine() {
         long last = preferences.getLong(LAST_UPDATE, 0L);
         String error = preferences.getString(LAST_ERROR, "");
-        if (last <= 0L) return "OpenFootball data not yet downloaded";
-        SimpleDateFormat format = new SimpleDateFormat("d MMM yyyy, h:mm a 'IST'", Locale.US);
+
+        if (last <= 0L) {
+            return "OpenFootball data not yet downloaded";
+        }
+
+        SimpleDateFormat format = new SimpleDateFormat(
+                "d MMM yyyy, h:mm a 'IST'",
+                Locale.US
+        );
         format.setTimeZone(TimeZone.getTimeZone("Asia/Kolkata"));
+
         String line = "OpenFootball updated " + format.format(new Date(last));
-        if (error != null && !error.trim().isEmpty()) line += " • Some sources unavailable";
+
+        if (error != null && !error.trim().isEmpty()) {
+            line += " • Some sources unavailable";
+        }
+
         return line;
     }
 
     void saveError(String message) {
-        preferences.edit().putString(LAST_ERROR, message == null ? "" : message).apply();
+        preferences.edit()
+                .putString(LAST_ERROR, message == null ? "" : message)
+                .apply();
     }
 
-    private List<Fixture> parseJson(String json, String competition) throws Exception {
+    private List<Fixture> parseJson(
+            String json,
+            String competition
+    ) throws Exception {
         List<Fixture> result = new ArrayList<>();
         JSONObject root = new JSONObject(json);
         JSONArray matches = root.optJSONArray("matches");
-        if (matches == null) return result;
+
+        if (matches == null) {
+            return result;
+        }
+
         for (int i = 0; i < matches.length(); i++) {
             JSONObject item = matches.optJSONObject(i);
-            if (item == null) continue;
+            if (item == null) {
+                continue;
+            }
+
             try {
-                result.add(Fixture.fromOpenFootballJson(new JSONObject(item.toString()), competition));
-            } catch (Exception ignored) { }
+                result.add(
+                        Fixture.fromOpenFootballJson(
+                                new JSONObject(item.toString()),
+                                competition
+                        )
+                );
+            } catch (Exception ignored) {
+                // Skip only the malformed fixture.
+            }
         }
+
         return result;
     }
 
-    private List<Fixture> parseFootballText(String text, String competition) throws Exception {
+    private List<Fixture> parseFootballText(
+            String text,
+            String competition
+    ) throws Exception {
         List<Fixture> result = new ArrayList<>();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(
-                new java.io.ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)),
-                StandardCharsets.UTF_8));
+
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(
+                        new ByteArrayInputStream(
+                                text.getBytes(StandardCharsets.UTF_8)
+                        ),
+                        StandardCharsets.UTF_8
+                )
+        );
 
         String currentDate = "";
         int currentYear = 0;
         String currentRound = "";
+        String currentTime = "";
         String line;
 
         while ((line = reader.readLine()) != null) {
             Matcher roundMatcher = ROUND_PATTERN.matcher(line);
             if (roundMatcher.matches()) {
                 currentRound = roundMatcher.group(1).trim();
+                currentTime = "";
                 continue;
             }
 
@@ -164,18 +241,46 @@ final class FixtureRepository {
                 String month = dateMatcher.group(1);
                 String day = dateMatcher.group(2);
                 String year = dateMatcher.group(3);
-                if (year != null) currentYear = Integer.parseInt(year);
-                if (currentYear == 0) currentYear = inferYear(month, day);
-                currentDate = toIsoDate(currentYear, month, day);
+
+                if (year != null) {
+                    currentYear = Integer.parseInt(year);
+                }
+
+                if (currentYear == 0) {
+                    currentYear = inferYear(month, day);
+                }
+
+                currentDate = toIsoDate(
+                        currentYear,
+                        month,
+                        day
+                );
+
+                currentTime = "";
                 continue;
             }
 
             Matcher matchMatcher = MATCH_PATTERN.matcher(line);
-            if (!matchMatcher.matches() || currentDate.isEmpty()) continue;
+            if (!matchMatcher.matches() || currentDate.isEmpty()) {
+                continue;
+            }
 
-            String time = matchMatcher.group(1);
+            String explicitTime = matchMatcher.group(1);
+            if (explicitTime != null && !explicitTime.trim().isEmpty()) {
+                currentTime = explicitTime.trim();
+            }
+
+            /*
+             * In Football.TXT a blank time means the same kickoff time as
+             * the previous match on that date. If no time has been supplied
+             * at all, we still keep the fixture with a zero timestamp rather
+             * than dropping real endpoint data.
+             */
+            String time = currentTime;
             String home = cleanTeam(matchMatcher.group(2));
             String away = cleanTeam(matchMatcher.group(3));
+            String venue = cleanVenue(matchMatcher.group(6));
+
             String hs = matchMatcher.group(4);
             String as = matchMatcher.group(5);
 
@@ -183,8 +288,19 @@ final class FixtureRepository {
             int awayGoals = as == null ? -1 : Integer.parseInt(as);
             boolean finished = homeGoals >= 0 && awayGoals >= 0;
 
-            long id = stableId(currentDate, time, home, away, currentRound, competition);
-            long timestamp = parseLocalTimestamp(currentDate, time);
+            long id = stableId(
+                    currentDate,
+                    time,
+                    home,
+                    away,
+                    currentRound,
+                    competition
+            );
+
+            long timestamp = parseLocalTimestamp(
+                    currentDate,
+                    time
+            );
 
             result.add(new Fixture(
                     id,
@@ -193,7 +309,7 @@ final class FixtureRepository {
                     time,
                     competition,
                     currentRound,
-                    "",
+                    venue,
                     "",
                     home,
                     away,
@@ -206,37 +322,78 @@ final class FixtureRepository {
                     new ArrayList<String>()
             ));
         }
+
         reader.close();
         return result;
     }
 
     private String cleanTeam(String value) {
-        return value == null ? "" : value.trim().replaceAll("\\s{2,}", " ");
+        if (value == null) {
+            return "";
+        }
+
+        return value.trim().replaceAll("\\s{2,}", " ");
+    }
+
+    private String cleanVenue(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value.trim().replaceAll("\\s{2,}", " ");
     }
 
     private int inferYear(String month, String day) {
-        int current = java.util.Calendar.getInstance(TimeZone.getTimeZone("UTC")).get(java.util.Calendar.YEAR);
+        Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+        int current = calendar.get(Calendar.YEAR);
         int monthNumber = monthNumber(month);
         return monthNumber >= 7 ? current : current + 1;
     }
 
-    private String toIsoDate(int year, String month, String day) {
-        return String.format(Locale.US, "%04d-%02d-%02d", year, monthNumber(month), Integer.parseInt(day));
+    private String toIsoDate(
+            int year,
+            String month,
+            String day
+    ) {
+        return String.format(
+                Locale.US,
+                "%04d-%02d-%02d",
+                year,
+                monthNumber(month),
+                Integer.parseInt(day)
+        );
     }
 
     private int monthNumber(String month) {
         try {
-            return new SimpleDateFormat("MMM", Locale.US).parse(month).getMonth() + 1;
+            Date parsed = new SimpleDateFormat(
+                    "MMM",
+                    Locale.US
+            ).parse(month);
+
+            return parsed == null ? 1 : parsed.getMonth() + 1;
         } catch (Exception ignored) {
             return 1;
         }
     }
 
-    private long parseLocalTimestamp(String date, String time) {
+    private long parseLocalTimestamp(
+            String date,
+            String time
+    ) {
+        if (date == null || date.isEmpty()
+                || time == null || time.isEmpty()) {
+            return 0L;
+        }
+
         try {
-            SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
+            SimpleDateFormat format = new SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm",
+                    Locale.US
+            );
             format.setLenient(false);
             format.setTimeZone(TimeZone.getTimeZone("UTC"));
+
             Date parsed = format.parse(date + " " + time);
             return parsed == null ? 0L : parsed.getTime() / 1000L;
         } catch (Exception ignored) {
@@ -246,9 +403,13 @@ final class FixtureRepository {
 
     private List<Fixture> parseCachedArray(JSONArray array) {
         List<Fixture> fixtures = new ArrayList<>();
+
         for (int i = 0; i < array.length(); i++) {
             JSONObject item = array.optJSONObject(i);
-            if (item == null) continue;
+            if (item == null) {
+                continue;
+            }
+
             try {
                 fixtures.add(new Fixture(
                         item.optLong("id", 0L),
@@ -269,14 +430,18 @@ final class FixtureRepository {
                         stringList(item.optJSONArray("homeScorers")),
                         stringList(item.optJSONArray("awayScorers"))
                 ));
-            } catch (Exception ignored) { }
+            } catch (Exception ignored) {
+                // Ignore one malformed cache entry.
+            }
         }
+
         sortFixtures(fixtures);
         return fixtures;
     }
 
     private void saveFixtures(List<Fixture> fixtures) {
         JSONArray array = new JSONArray();
+
         for (Fixture f : fixtures) {
             try {
                 JSONObject item = new JSONObject();
@@ -298,31 +463,58 @@ final class FixtureRepository {
                 item.put("homeScorers", new JSONArray(f.homeScorers));
                 item.put("awayScorers", new JSONArray(f.awayScorers));
                 array.put(item);
-            } catch (Exception ignored) { }
+            } catch (Exception ignored) {
+                // Ignore one malformed item during cache serialization.
+            }
         }
-        preferences.edit().putString(CACHE, array.toString()).apply();
+
+        preferences.edit()
+                .putString(CACHE, array.toString())
+                .apply();
     }
 
     private List<Fixture> deduplicate(List<Fixture> input) {
         List<Fixture> result = new ArrayList<>();
         Set<String> seen = new HashSet<>();
+
         for (Fixture f : input) {
-            String key = f.competition + "|" + f.sourceDate + "|" + f.sourceTime + "|" + f.homeName + "|" + f.awayName;
-            if (seen.add(key)) result.add(f);
+            String key = f.competition
+                    + "|" + f.sourceDate
+                    + "|" + f.sourceTime
+                    + "|" + f.homeName
+                    + "|" + f.awayName;
+
+            if (seen.add(key)) {
+                result.add(f);
+            }
         }
+
         return result;
     }
 
     private void sortFixtures(List<Fixture> fixtures) {
-        Collections.sort(fixtures, new Comparator<Fixture>() {
-            @Override public int compare(Fixture a, Fixture b) {
-                return Long.compare(a.timestampSeconds, b.timestampSeconds);
-            }
-        });
+        Collections.sort(
+                fixtures,
+                new Comparator<Fixture>() {
+                    @Override
+                    public int compare(Fixture a, Fixture b) {
+                        int dateCompare = a.dateKey().compareTo(b.dateKey());
+                        if (dateCompare != 0) {
+                            return dateCompare;
+                        }
+
+                        return Long.compare(
+                                a.timestampSeconds,
+                                b.timestampSeconds
+                        );
+                    }
+                }
+        );
     }
 
     private String download(String address) throws Exception {
         HttpURLConnection connection = null;
+
         try {
             connection = (HttpURLConnection) new URL(address).openConnection();
             connection.setRequestMethod("GET");
@@ -330,46 +522,88 @@ final class FixtureRepository {
             connection.setReadTimeout(20000);
             connection.setUseCaches(false);
             connection.setRequestProperty("User-Agent", "FootballFixture/1.0");
+
             int response = connection.getResponseCode();
-            if (response < 200 || response >= 300) throw new Exception("HTTP " + response);
+            if (response < 200 || response >= 300) {
+                throw new Exception("HTTP " + response);
+            }
+
             InputStream input = connection.getInputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(input, StandardCharsets.UTF_8)
+            );
+
             StringBuilder builder = new StringBuilder();
             String line;
-            while ((line = reader.readLine()) != null) builder.append(line).append('\n');
+
+            while ((line = reader.readLine()) != null) {
+                builder.append(line).append('\n');
+            }
+
             reader.close();
             return builder.toString();
         } finally {
-            if (connection != null) connection.disconnect();
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 
     private static List<String> stringList(JSONArray array) {
         List<String> result = new ArrayList<>();
-        if (array == null) return result;
+
+        if (array == null) {
+            return result;
+        }
+
         for (int i = 0; i < array.length(); i++) {
             String value = array.optString(i, "").trim();
-            if (!value.isEmpty()) result.add(value);
+            if (!value.isEmpty()) {
+                result.add(value);
+            }
         }
+
         return result;
     }
 
     private String joinErrors(List<String> errors) {
         StringBuilder b = new StringBuilder();
+
         for (String error : errors) {
-            if (b.length() > 0) b.append("; ");
+            if (b.length() > 0) {
+                b.append("; ");
+            }
             b.append(error);
         }
+
         return b.toString();
     }
 
-    private long stableId(String date, String time, String home, String away, String round, String competition) {
-        return Math.abs((long) (date + "|" + time + "|" + home + "|" + away + "|" + round + "|" + competition).hashCode());
+    private long stableId(
+            String date,
+            String time,
+            String home,
+            String away,
+            String round,
+            String competition
+    ) {
+        return Math.abs((long) (
+                date + "|"
+                        + time + "|"
+                        + home + "|"
+                        + away + "|"
+                        + round + "|"
+                        + competition
+        ).hashCode());
     }
 
     private static final class Source {
         final String name;
         final String url;
-        Source(String name, String url) { this.name = name; this.url = url; }
+
+        Source(String name, String url) {
+            this.name = name;
+            this.url = url;
+        }
     }
 }
