@@ -16,6 +16,9 @@ final class Fixture {
     final long id;
     final long timestampSeconds;
 
+    final String sourceDate;
+    final String sourceTime;
+
     final String competition;
     final String round;
     final String venue;
@@ -51,8 +54,51 @@ final class Fixture {
             List<String> homeScorers,
             List<String> awayScorers
     ) {
+        this(
+                id,
+                timestampSeconds,
+                "",
+                "",
+                competition,
+                round,
+                venue,
+                city,
+                homeName,
+                awayName,
+                homeGoals,
+                awayGoals,
+                statusShort,
+                statusLong,
+                elapsed,
+                homeScorers,
+                awayScorers
+        );
+    }
+
+    Fixture(
+            long id,
+            long timestampSeconds,
+            String sourceDate,
+            String sourceTime,
+            String competition,
+            String round,
+            String venue,
+            String city,
+            String homeName,
+            String awayName,
+            int homeGoals,
+            int awayGoals,
+            String statusShort,
+            String statusLong,
+            int elapsed,
+            List<String> homeScorers,
+            List<String> awayScorers
+    ) {
         this.id = id;
         this.timestampSeconds = timestampSeconds;
+
+        this.sourceDate = clean(sourceDate);
+        this.sourceTime = clean(sourceTime);
 
         this.competition = clean(competition);
         this.round = clean(round);
@@ -109,6 +155,9 @@ final class Fixture {
             competition = sourceCompetition;
         }
 
+        String sourceDate = item.optString("date", "");
+        String sourceTime = item.optString("time", "");
+
         List<String> homeScorers =
                 readScorers(item, "goals1", "scorers1");
 
@@ -117,10 +166,9 @@ final class Fixture {
 
         return new Fixture(
                 item.optLong("num", stableId(item)),
-                parseTimestamp(
-                        item.optString("date"),
-                        item.optString("time")
-                ),
+                parseTimestamp(sourceDate, sourceTime),
+                sourceDate,
+                sourceTime,
                 competition,
                 item.optString("round"),
                 item.optString("ground"),
@@ -182,51 +230,55 @@ final class Fixture {
     }
 
     String matchTitle() {
-        String home =
-                homeName.isEmpty()
-                        ? "TBD"
-                        : homeName;
-
-        String away =
-                awayName.isEmpty()
-                        ? "TBD"
-                        : awayName;
-
+        String home = homeName.isEmpty() ? "TBD" : homeName;
+        String away = awayName.isEmpty() ? "TBD" : awayName;
         return home + " vs " + away;
     }
 
     String scoreTitle() {
         if (homeGoals >= 0 && awayGoals >= 0) {
-            return homeName
-                    + " "
-                    + homeGoals
-                    + " - "
-                    + awayGoals
-                    + " "
-                    + awayName;
+            return homeName + " " + homeGoals + " - " + awayGoals + " " + awayName;
         }
 
         return matchTitle();
     }
 
+    String dateKey() {
+        if (!sourceDate.isEmpty()) {
+            return sourceDate;
+        }
+
+        if (timestampSeconds <= 0) {
+            return "";
+        }
+
+        SimpleDateFormat format = new SimpleDateFormat(
+                "yyyy-MM-dd",
+                Locale.US
+        );
+        format.setTimeZone(TimeZone.getTimeZone("Asia/Kolkata"));
+        return format.format(new Date(timestampSeconds * 1000L));
+    }
+
     String dateLine() {
+        if (!sourceDate.isEmpty() && !sourceTime.isEmpty()) {
+            if (!hasExplicitTimezone(sourceTime)) {
+                return sourceDate + " • " + sourceTime;
+            }
+        }
+
         if (timestampSeconds <= 0) {
             return "Time TBD";
         }
 
-        Date date =
-                new Date(timestampSeconds * 1000L);
+        Date date = new Date(timestampSeconds * 1000L);
 
-        DateFormat format =
-                new SimpleDateFormat(
-                        "d MMM yyyy, h:mm a 'IST'",
-                        Locale.US
-                );
-
-        format.setTimeZone(
-                TimeZone.getTimeZone("Asia/Kolkata")
+        DateFormat format = new SimpleDateFormat(
+                "d MMM yyyy, h:mm a 'IST'",
+                Locale.US
         );
 
+        format.setTimeZone(TimeZone.getTimeZone("Asia/Kolkata"));
         return format.format(date);
     }
 
@@ -248,18 +300,12 @@ final class Fixture {
 
     String statusLine() {
         if (isLive()) {
-            String clock =
-                    elapsed > 0
-                            ? " - " + elapsed + "'"
-                            : "";
-
+            String clock = elapsed > 0 ? " - " + elapsed + "'" : "";
             return "Live" + clock;
         }
 
         if (isFinished()) {
-            return statusLong.isEmpty()
-                    ? "Finished"
-                    : statusLong;
+            return statusLong.isEmpty() ? "Finished" : statusLong;
         }
 
         return dateLine();
@@ -286,9 +332,14 @@ final class Fixture {
         return !isLive() && !isFinished();
     }
 
-    private static List<String> copyList(
-            List<String> source
-    ) {
+    private static boolean hasExplicitTimezone(String time) {
+        String[] parts = clean(time).split("\\s+");
+        return parts.length >= 2
+                && (parts[1].startsWith("UTC")
+                || parts[1].startsWith("GMT"));
+    }
+
+    private static List<String> copyList(List<String> source) {
         if (source == null) {
             return new ArrayList<>();
         }
@@ -297,81 +348,45 @@ final class Fixture {
     }
 
     private static String clean(String value) {
-        if (value == null
-                || "null".equalsIgnoreCase(value)) {
+        if (value == null || "null".equalsIgnoreCase(value)) {
             return "";
         }
 
         return value.trim();
     }
 
-    private static long parseTimestamp(
-            String date,
-            String time
-    ) {
+    private static long parseTimestamp(String date, String time) {
         try {
             String cleanTime = clean(time);
+            String[] parts = cleanTime.split("\\s+");
 
-            String[] parts =
-                    cleanTime.split("\\s+");
+            String clock = parts.length > 0 ? parts[0] : "00:00";
+            String zone = parts.length > 1 ? parts[1] : "UTC";
 
-            String clock =
-                    parts.length > 0
-                            ? parts[0]
-                            : "00:00";
-
-            String zone =
-                    parts.length > 1
-                            ? parts[1]
-                            : "UTC";
-
-            SimpleDateFormat format =
-                    new SimpleDateFormat(
-                            "yyyy-MM-dd HH:mm",
-                            Locale.US
-                    );
-
-            format.setLenient(false);
-
-            format.setTimeZone(
-                    TimeZone.getTimeZone(
-                            toGmtZone(zone)
-                    )
+            SimpleDateFormat format = new SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm",
+                    Locale.US
             );
+            format.setLenient(false);
+            format.setTimeZone(TimeZone.getTimeZone(toGmtZone(zone)));
 
-            Date parsed =
-                    format.parse(
-                            clean(date)
-                                    + " "
-                                    + clock
-                    );
+            Date parsed = format.parse(clean(date) + " " + clock);
 
-            return parsed == null
-                    ? 0
-                    : parsed.getTime() / 1000L;
-
+            return parsed == null ? 0 : parsed.getTime() / 1000L;
         } catch (Exception ignored) {
             return 0;
         }
     }
 
-    private static String toGmtZone(
-            String zone
-    ) {
-        String cleanZone =
-                clean(zone)
-                        .replace("UTC", "GMT");
+    private static String toGmtZone(String zone) {
+        String cleanZone = clean(zone).replace("UTC", "GMT");
 
         if ("GMT".equals(cleanZone)) {
             return "GMT";
         }
 
-        int plus =
-                cleanZone.indexOf('+');
-
-        int minus =
-                cleanZone.indexOf('-');
-
+        int plus = cleanZone.indexOf('+');
+        int minus = cleanZone.indexOf('-');
         int signIndex;
 
         if (plus >= 0 && minus >= 0) {
@@ -386,8 +401,7 @@ final class Fixture {
             return "GMT";
         }
 
-        String offset =
-                cleanZone.substring(signIndex);
+        String offset = cleanZone.substring(signIndex);
 
         if (!offset.contains(":")) {
             offset += ":00";
@@ -396,19 +410,12 @@ final class Fixture {
         return "GMT" + offset;
     }
 
-    private static long stableId(
-            JSONObject item
-    ) {
-        String seed =
-                item.optString("date")
-                        + "|"
-                        + item.optString("time")
-                        + "|"
-                        + item.optString("team1")
-                        + "|"
-                        + item.optString("team2")
-                        + "|"
-                        + item.optString("round");
+    private static long stableId(JSONObject item) {
+        String seed = item.optString("date")
+                + "|" + item.optString("time")
+                + "|" + item.optString("team1")
+                + "|" + item.optString("team2")
+                + "|" + item.optString("round");
 
         return Math.abs((long) seed.hashCode());
     }
